@@ -1,0 +1,84 @@
+SELECT 
+    MD5(CONCAT(LOWER(ar.email), COALESCE(ar.phone, ''))) AS user_id,
+    subquery.first_date,
+    subquery.last_date,  -- Explicitly referencing subquery.last_date
+    DATE_SUB(subquery.first_date, INTERVAL (DAYOFWEEK(subquery.first_date) - 1) DAY) AS week_date,
+    ar.email,
+    ar.phone,
+    UPPER(ar.full_name) AS full_name,
+    CASE 
+        WHEN ar.sou = 'P' THEN 'Proprietário' 
+        WHEN ar.sou = 'I' THEN 'Imobiliária ou Corretor' 
+        WHEN ar.sou = 'S' THEN 'Somente Curioso' 
+        WHEN ar.sou = 'C' THEN 'Comprador' 
+        WHEN ar.sou = 'O' THEN 'Outro' 
+        ELSE 'Unknown' 
+    END AS sou_full,
+    ar.sou AS sou_original,
+    ar.place_id,
+    ar.formatted_address,
+    ar.neighborhood,
+    last_report.city AS last_city, -- Now we join to get the city of the last report
+    ar.price_market,
+    CASE 
+        WHEN ar.price_market < 400000 THEN "Less than 400k"
+        WHEN ar.price_market < 850000 THEN "400k to 850k"
+        WHEN ar.price_market < 1500000 THEN "850k to 1500000"
+        WHEN ar.price_market >= 1500000 THEN "Over 1500000"
+        ELSE "Not Applicable"
+    END AS market_price_category,
+    subquery.reports_generated,
+    CASE 
+        WHEN subquery.reports_generated >= 2 THEN subquery.price_range_lower
+        ELSE NULL
+    END AS lowest_price,
+    CASE 
+        WHEN subquery.reports_generated >= 2 THEN subquery.price_range_upper
+        ELSE NULL
+    END AS highest_price,
+    subquery.worked AS reports_worked,
+    subquery.total_locations AS total_cities,
+    DATE_FORMAT(subquery.first_date, '%m-%Y') AS month,
+    DATEDIFF(subquery.last_date, subquery.first_date) AS days_between_reports  -- Explicitly specifying subquery.last_date
+FROM (
+    SELECT 
+        MD5(CONCAT(LOWER(email), COALESCE(phone, ''))) AS user_id,
+        MIN(created_at) AS first_date,
+        MAX(created_at) AS last_date,
+        LOWER(email) AS email,
+        COALESCE(phone, '') AS phone,
+        MIN(price_market) AS price_range_lower,
+        MAX(price_market) AS price_range_upper,
+        COUNT(id) AS reports_generated,
+        COUNT(CASE WHEN price_market IS NOT NULL THEN 1 END) AS worked,
+        COUNT(DISTINCT city) AS total_locations
+    FROM `avm_results`
+    WHERE
+		email NOT LIKE "%propdo.com%" 
+    	AND email NOT LIKE "%agenteimovel.com.br%" 
+    	AND email NOT LIKE "%fator%"
+    	AND email NOT LIKE "%xyz%"
+    	AND email NOT LIKE "%AAA%" 
+    	AND email NOT LIKE "%sample%" 
+    	AND email NOT LIKE "%example%" 
+        AND email NOT REGEXP '^(.)\\1{4,}@'
+        AND full_name NOT REGEXP '^(.)(\\1{2,})$'
+    	AND full_name NOT LIKE "%teste%" 
+    	AND full_name NOT LIKE "%AAA%"
+        AND full_name != "David David"
+    	AND CHAR_LENGTH(full_name) >= 3 
+    GROUP BY user_id
+) AS subquery
+JOIN `avm_results` ar ON subquery.user_id = MD5(CONCAT(LOWER(ar.email), COALESCE(ar.phone, '')))
+-- JOIN to retrieve the city from the last report
+JOIN (
+    SELECT 
+        MD5(CONCAT(LOWER(email), COALESCE(phone, ''))) AS user_id,
+        city,
+        MAX(created_at) AS last_date
+    FROM `avm_results`
+    GROUP BY user_id, city
+) AS last_report 
+ON subquery.user_id = last_report.user_id AND subquery.last_date = last_report.last_date
+GROUP BY  MD5(CONCAT(LOWER(ar.email), COALESCE(ar.phone, '')))
+ORDER BY subquery.reports_generated DESC;
